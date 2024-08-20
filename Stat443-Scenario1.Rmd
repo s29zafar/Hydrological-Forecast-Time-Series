@@ -1,0 +1,136 @@
+---
+title: "Scenario1"
+author: "Saim Zafar"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Import Libraries
+library(stats)
+library(readr)
+library(astsa)
+library(rugarch)
+library(MTS)
+library(ggplot2)
+library(fGarch)
+library(forecast)
+library(gridExtra)
+library(tidyverse)
+library(tseries)
+library(readr)
+library(urca)
+library(MASS)
+```
+
+### Scenario 1: Hydrological time series
+
+Import the Data and plot it to see the time series.
+
+```{r}
+df_txt <- read.table(file = "~/Desktop/Stat 443/Final Report/STAT 443 - Spring 2024 Data/hydrology_data.txt", header = TRUE)
+hydro_TS <- ts(df_txt)
+#View(df_txt)
+#head(df_txt)
+#plot(df_txt$index, df_txt$Value, type = "l", xlab = "Time", ylab = "Water Levels", main = "Hydrological time series")
+plot(hydro_TS,  xlab = "Time", ylab = "Water Levels", main = "Hydrological time series")
+```
+
+We should check this data for stationarity first and then see if the ACF and PACF can suggest a good model.
+
+```{r,warning=FALSE}
+kpss.test(hydro_TS)
+```
+We see that as the p-value is smaller than printed p-value so we have to reject the hypothesis that the data is stationary.
+```{r}
+par(mfrow = c(1,2))
+acf(hydro_TS, lag.max = 20) 
+pacf(hydro_TS, lag.max = 20)
+par(mfrow = c(1,1))
+```
+The ACF and PACF suggest we should use Auto.ARIMA to find appropriate orders of the ARIMA model, as we don't see any simple AR or MA models in the data..
+```{r}
+Model <- auto.arima(hydro_TS)
+summary(Model)
+```
+We get a ARIMA(5,1,1) model. After seeing the residuals, I am not sure if their is seasonality or not. So I will use both models as well as ETS and then use cross-validation to find the best models.  
+
+```{r}
+mod1 <- sarima(hydro_TS,p = 5,d = 1,q = 1,P = 0,Q = 1, D = 1, S = 12, details = FALSE)
+mod2 <- sarima(hydro_TS,p = 5,d = 1,q = 1,P = 0,Q = 0, D = 0, S = 4,details = FALSE)
+```
+The diagnositics of the above models are as follows.
+```{r, fig.width=5,fig.height=5}
+par(mfrow = c(2,2))
+tsdiag(mod1$fit)
+tsdiag(mod2$fit)
+par(mfrow = c(1,1))
+```
+We see that the residuals are similar to White Noise as suggested by the BLP test for both seasonal and non-seasonal models.
+
+We also check a ETS model:
+
+```{r}
+ets(hydro_TS)
+plot(ets(hydro_TS))
+```
+
+To compare the three models we need to perform a Cross Validation:
+```{r, warning=FALSE}
+n_fit <- 500
+base_dat <- hydro_TS
+test_id <- 1:(length(hydro_TS)-n_fit-24)
+err1 <- err2 <-  err3 <- rep(NA,length(test_id))
+
+
+for(i in test_id){
+  #cat(paste0(i,', '))
+  dat_fit <- ts(hydro_TS[1:(n_fit+i-1)])
+  for1  <- as.numeric(sarima.for(dat_fit,n.ahead = 24,
+                                 p = 5, d = 1, q = 1,
+                                 P = 0, D = 1, Q = 1,
+                                 S = 12, plot = FALSE)$pred)
+  err1[i] <- sum((base_dat[(n_fit+i+0):(n_fit+i+23)] - for1)^2)
+  
+  for2  <- as.numeric(predict(ets(dat_fit),24)$mean)
+  err2[i] <- sum((base_dat[(n_fit+i+0):(n_fit+i+23)] - for2)^2)
+  
+  for3  <- as.numeric(sarima.for(dat_fit,n.ahead = 24,
+                                 p = 5, d = 1, q = 1,
+                                 P = 0, D = 0, Q = 0,
+                                 S = 4, plot = FALSE)$pred)
+  err3[i] <- sum((base_dat[(n_fit+i+0):(n_fit+i+23)] - for3)^2)
+}
+
+mean(err1);mean(err2);mean(err3)
+```
+After CV we see that the $SARIMA(5,1,1,0,1,1)_{12}$ model is the best. Lets setup forecast into it for the next 24 months and export it to a txt file.
+```{r}
+forcast_Scenario1 <- sarima.for(hydro_TS, n.ahead = 24, p = 5, d = 1, q = 1,
+                                 P = 0, D = 1, Q = 1,
+                                 S = 12, plot.all = FALSE, plot = FALSE)
+
+forecasts_plot <- data.frame('x'=seq(577:600),
+             'forecast'=as.numeric(forcast_Scenario1$pred),
+             'low'=as.numeric(forcast_Scenario1$pred-1.96*forcast_Scenario1$se),
+             'upp'=as.numeric(forcast_Scenario1$pred+1.96*forcast_Scenario1$se) )
+#forecasts_plot
+
+
+ggplot() +
+  geom_line(aes(x=seq(1:576), 
+                y=hydro_TS),linewidth=1) +
+  geom_line(aes(x=576+seq(1:24), 
+                y=forecasts_plot$forecast),linewidth=1,color='red') +
+  geom_ribbon(aes(x=576+seq(1:24),ymin=forecasts_plot$low,ymax=forecasts_plot$upp),alpha=0.25,fill='red')+
+  xlab("Time")+ylab("Water Levels")
+```
+```{r, include= FALSE}
+last.name = "Zafar"
+student.id = 20888160
+
+forecast1 <- forecasts_plot$forecast  # Forecast is a vector length 24 for forecast 1
+write(forecast1, file = paste("Scenario1_",last.name,student.id,".txt", sep = ""), ncolumns = 1 )
+```
+
+
